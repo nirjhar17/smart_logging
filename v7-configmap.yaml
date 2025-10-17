@@ -1,0 +1,862 @@
+apiVersion: v1
+data:
+  app.py: "#!/usr/bin/env python3\n\"\"\"\nAI Troubleshooter v7 - Multi-Agent Self-Corrective
+    RAG\nIntegrates NVIDIA-inspired multi-agent workflow with v6 UI\n\"\"\"\n\nimport
+    streamlit as st\nimport subprocess\nimport json\nimport os\nfrom datetime import
+    datetime\nfrom typing import Dict, List, Any\nimport sys\n\n# Add v7 modules to
+    path\nsys.path.insert(0, os.path.dirname(__file__))\n\n# Import v7 multi-agent
+    components\nfrom v7_main_graph import run_analysis, create_workflow, visualize_workflow\nfrom
+    v7_log_collector import OpenShiftLogCollector\nfrom v7_hybrid_retriever import
+    HybridRetriever\n\n# Import v6 KubernetesDataCollector (reuse!)\n# We'll copy
+    this from v6 since it's proven to work\nfrom llama_stack_client import LlamaStackClient\n\n#
+    Configuration\nLLAMA_STACK_URL = os.getenv(\"LLAMA_STACK_URL\", \"http://llamastack-custom-distribution-service.model.svc.cluster.local:8321\")\nLLAMA_STACK_MODEL
+    = os.getenv(\"LLAMA_STACK_MODEL\", \"llama-32-3b-instruct\")\nVECTOR_DB_ID = os.getenv(\"VECTOR_DB_ID\",
+    \"openshift-logs-v7\")\nMAX_ITERATIONS = int(os.getenv(\"MAX_ITERATIONS\", \"3\"))\n\n#
+    KubernetesDataCollector from v6 (REUSED - proven to work)\nclass KubernetesDataCollector:\n
+    \   \"\"\"\n    Hybrid adapter from v6 - REUSING AS-IS\n    \"\"\"\n    \n    def
+    __init__(self):\n        self.use_mcp = self._detect_mcp_environment()\n        self.data_source
+    = \"MCP\" if self.use_mcp else \"oc commands\"\n        \n    def _detect_mcp_environment(self):\n
+    \       return False  # Use oc commands in production\n    \n    def get_namespaces(self):\n
+    \       try:\n            result = subprocess.run(['oc', 'get', 'namespaces',
+    '--no-headers'], \n                                  capture_output=True, text=True,
+    timeout=30)\n            if result.returncode == 0:\n                return [line.split()[0]
+    for line in result.stdout.strip().split('\\n') if line.strip()]\n        except:\n
+    \           pass\n        return [\"default\"]\n    \n    def get_pods_in_namespace(self,
+    namespace: str):\n        try:\n            result = subprocess.run(['oc', 'get',
+    'pods', '-n', namespace, '--no-headers'], \n                                  capture_output=True,
+    text=True, timeout=30)\n            if result.returncode == 0:\n                pods
+    = []\n                for line in result.stdout.strip().split('\\n'):\n                    if
+    line.strip():\n                        pods.append(line.split()[0])\n                return
+    pods\n        except:\n            pass\n        return []\n    \n    def get_pod_logs(self,
+    pod_name: str, namespace: str, tail_lines: int = 50):\n        try:\n            result
+    = subprocess.run(['oc', 'logs', pod_name, '-n', namespace, f'--tail={tail_lines}'],
+    \n                                  capture_output=True, text=True, timeout=30)\n
+    \           if result.returncode == 0:\n                return result.stdout\n
+    \       except:\n            pass\n        return \"\"\n    \n    def get_events(self,
+    namespace: str):\n        try:\n            result = subprocess.run(['oc', 'get',
+    'events', '-n', namespace, '--sort-by=.lastTimestamp'], \n                                  capture_output=True,
+    text=True, timeout=30)\n            if result.returncode == 0:\n                return
+    result.stdout\n        except:\n            pass\n        return \"\"\n    \n
+    \   def get_pod_info(self, pod_name: str, namespace: str):\n        try:\n            result
+    = subprocess.run(['oc', 'get', 'pod', pod_name, '-n', namespace, '-o', 'json'],
+    \n                                  capture_output=True, text=True, timeout=30)\n
+    \           if result.returncode == 0:\n                return json.loads(result.stdout)\n
+    \       except:\n            pass\n        return {}\n\n# Initialize components\nk8s_collector
+    = KubernetesDataCollector()\n\n# Page configuration (same as v6)\nst.set_page_config(\n
+    \   page_title=\"AI Troubleshooter v7 (Multi-Agent)\",\n    page_icon=\"\U0001F3AF\",\n
+    \   layout=\"wide\",\n    initial_sidebar_state=\"expanded\"\n)\n\n# Enhanced
+    CSS (same as v6 with v7 branding)\nst.markdown(\"\"\"\n<style>\n    .main-header
+    {\n        background: linear-gradient(90deg, #1e3a8a, #3b82f6, #10b981);\n        color:
+    white !important;\n        padding: 1.5rem;\n        border-radius: 12px;\n        text-align:
+    center;\n        margin-bottom: 2rem;\n        border: 1px solid #3b82f6;\n        box-shadow:
+    0 4px 8px rgba(59, 130, 246, 0.2);\n    }\n    \n    .multiagent-badge {\n        background:
+    linear-gradient(90deg, #10b981, #3b82f6, #8b5cf6);\n        color: white !important;\n
+    \       padding: 0.5rem 1rem;\n        border-radius: 20px;\n        font-size:
+    0.9rem;\n        font-weight: bold;\n        display: inline-block;\n        margin:
+    0.5rem 0;\n    }\n    \n    .iteration-badge {\n        background: linear-gradient(90deg,
+    #f59e0b, #f97316);\n        color: white !important;\n        padding: 0.3rem
+    0.8rem;\n        border-radius: 15px;\n        font-size: 0.8rem;\n        font-weight:
+    bold;\n        display: inline-block;\n        margin: 0.2rem 0;\n    }\n    \n
+    \   .technical-analysis {\n        background-color: #f0f9ff !important;\n        color:
+    #0c4a6e !important;\n        border-left: 6px solid #3b82f6;\n        border:
+    1px solid #3b82f6;\n        padding: 1.5rem;\n        border-radius: 8px;\n        margin:
+    1rem 0;\n        box-shadow: 0 2px 4px rgba(59, 130, 246, 0.1);\n        font-family:
+    'Courier New', monospace;\n    }\n</style>\n\"\"\", unsafe_allow_html=True)\n\n#
+    Header (v7 branding)\nst.markdown(\"\"\"\n<div class=\"main-header\">\n    <h1>\U0001F3AF
+    AI Troubleshooter v7 (Multi-Agent)</h1>\n    <p>Self-Corrective RAG: BM25 + Vector
+    + Reranking + Grading + Query Transformation</p>\n    <div class=\"multiagent-badge\">\n
+    \       \U0001F916 Multi-Agent Workflow | \U0001F504 Self-Correction | \U0001F4CA
+    Hybrid Retrieval\n    </div>\n</div>\n\"\"\", unsafe_allow_html=True)\n\n# Sidebar
+    configuration (reusing v6 structure)\nst.sidebar.markdown(\"## \U0001F527 Multi-Agent
+    Configuration\")\n\n# Display data source\ndata_source_color = \"\U0001F7E2\"
+    if k8s_collector.use_mcp else \"\U0001F535\"\nst.sidebar.info(f\"{data_source_color}
+    **Data Source**: {k8s_collector.data_source}\")\nst.sidebar.info(f\"\U0001F916
+    **AI Model**: {LLAMA_STACK_MODEL}\")\nst.sidebar.info(f\"\U0001F504 **Max Iterations**:
+    {MAX_ITERATIONS}\")\n\n# Get namespaces\nnamespaces = k8s_collector.get_namespaces()\n\nselected_namespace
+    = st.sidebar.selectbox(\n    \"\U0001F4C1 Select Namespace:\",\n    options=namespaces,\n
+    \   index=namespaces.index(\"default\") if \"default\" in namespaces else 0\n)\n\n#
+    Get pods\nif selected_namespace:\n    pods = k8s_collector.get_pods_in_namespace(selected_namespace)\n
+    \   \n    selected_pod = st.sidebar.selectbox(\n        \"\U0001F433 Select Pod:\",\n
+    \       options=pods if pods else [\"No pods found\"],\n        disabled=not pods\n
+    \   )\n\n# Analysis options\nst.sidebar.markdown(\"### \U0001F39B️ Analysis Options\")\ninclude_logs
+    = st.sidebar.checkbox(\"\U0001F4DD Include Recent Logs\", value=True)\ninclude_events
+    = st.sidebar.checkbox(\"\U0001F4CB Include Pod Events\", value=True)\nmax_iterations
+    = st.sidebar.slider(\"\U0001F504 Max Self-Correction Iterations\", 1, 5, MAX_ITERATIONS)\n\n#
+    Metrics display\ncol1, col2, col3, col4 = st.columns(4)\nwith col1:\n    st.metric(\"\U0001F916
+    Agent Type\", \"Multi-Agent\")\nwith col2:\n    st.metric(\"\U0001F50D Retrieval\",
+    \"Hybrid\")\nwith col3:\n    st.metric(\"\U0001F3AF Reranking\", \"Enabled\")\nwith
+    col4:\n    st.metric(\"\U0001F4CA Grading\", \"Enabled\")\n\n# Main analysis button\nif
+    st.sidebar.button(\"\U0001F680 Start Multi-Agent Deep Analysis\", type=\"primary\"):\n
+    \   if not selected_pod or selected_pod == \"No pods found\":\n        st.error(\"❌
+    Please select a valid pod to analyze\")\n    else:\n        # Progress container\n
+    \       progress_container = st.container()\n        \n        with progress_container:\n
+    \           st.markdown(\"### \U0001F504 Multi-Agent Workflow Progress\")\n            \n
+    \           # Create progress placeholders\n            status_placeholder = st.empty()\n
+    \           iteration_placeholder = st.empty()\n            progress_bar = st.progress(0)\n
+    \           \n            status_placeholder.info(\"\U0001F504 Initializing multi-agent
+    workflow...\")\n            \n            # Collect pod data\n            status_placeholder.info(\"\U0001F4E6
+    Collecting pod data...\")\n            progress_bar.progress(10)\n            \n
+    \           pod_info = k8s_collector.get_pod_info(selected_pod, selected_namespace)\n
+    \           \n            # Get logs if requested\n            logs = \"\"\n            if
+    include_logs:\n                status_placeholder.info(\"\U0001F4DD Collecting
+    pod logs...\")\n                progress_bar.progress(20)\n                logs
+    = k8s_collector.get_pod_logs(selected_pod, selected_namespace, tail_lines=100)\n
+    \           \n            # Get events if requested\n            events = \"\"\n
+    \           if include_events:\n                status_placeholder.info(\"\U0001F4CB
+    Collecting pod events...\")\n                progress_bar.progress(30)\n                events
+    = k8s_collector.get_events(selected_namespace)\n            \n            # Build
+    question\n            pod_status = pod_info.get('status', {})\n            phase
+    = pod_status.get('phase', 'Unknown')\n            \n            # Auto-generate
+    question based on pod status\n            if phase != 'Running':\n                question
+    = f\"Why is pod {selected_pod} in {phase} state?\"\n            else:\n                question
+    = f\"Analyze pod {selected_pod} for any issues or errors\"\n            \n            #
+    Show collected data summary\n            st.markdown(\"#### \U0001F4CA Collected
+    Data Summary\")\n            col1, col2, col3 = st.columns(3)\n            with
+    col1:\n                st.metric(\"Log Lines\", len(logs.split('\\n')) if logs
+    else 0)\n            with col2:\n                st.metric(\"Events\", len(events.split('\\n'))
+    if events else 0)\n            with col3:\n                st.metric(\"Pod Status\",
+    phase)\n            \n            # Run multi-agent analysis\n            status_placeholder.info(\"\U0001F916
+    Starting multi-agent workflow...\")\n            progress_bar.progress(40)\n            \n
+    \           try:\n                # Run v7 multi-agent analysis\n                result
+    = run_analysis(\n                    question=question,\n                    namespace=selected_namespace,\n
+    \                   pod_name=selected_pod,\n                    log_context=logs,\n
+    \                   pod_events=events,\n                    pod_status=pod_status,\n
+    \                   time_window=30,\n                    max_iterations=max_iterations,\n
+    \                   llama_stack_url=LLAMA_STACK_URL\n                )\n                \n
+    \               progress_bar.progress(100)\n                status_placeholder.success(\"✅
+    Multi-agent analysis complete!\")\n                \n                # Display
+    results\n                if result.get(\"success\"):\n                    st.markdown(\"---\")\n
+    \                   st.markdown(\"## \U0001F4CA Multi-Agent Analysis Results\")\n
+    \                   \n                    # Show iteration info\n                    iterations
+    = result.get('iterations', 0)\n                    if iterations > 0:\n                        st.markdown(f'<div
+    class=\"iteration-badge\">\U0001F504 Self-Corrected: {iterations} iterations</div>',
+    unsafe_allow_html=True)\n                    \n                    # Create tabs
+    for results\n                    tab1, tab2, tab3, tab4, tab5 = st.tabs([\n                        \"\U0001F3AF
+    Analysis\",\n                        \"\U0001F4DA Evidence\",\n                        \"\U0001F504
+    Workflow\",\n                        \"\U0001F4CB Pod Details\",\n                        \"\U0001F4CA
+    Metrics\"\n                    ])\n                    \n                    with
+    tab1:\n                        st.markdown(\"### \U0001F3AF Multi-Agent Analysis\")\n
+    \                       st.markdown('<div class=\"technical-analysis\">', unsafe_allow_html=True)\n
+    \                       st.markdown(result['answer'])\n                        st.markdown('</div>',
+    unsafe_allow_html=True)\n                    \n                    with tab2:\n
+    \                       st.markdown(\"### \U0001F4DA Evidence Used\")\n                        docs
+    = result.get('relevant_docs', [])\n                        st.write(f\"**Found
+    {len(docs)} relevant log snippets**\")\n                        \n                        for
+    i, doc in enumerate(docs, 1):\n                            with st.expander(f\"\U0001F4C4
+    Evidence {i} (Score: {doc.get('score', 0):.3f})\"):\n                                st.code(doc.get('content',
+    '')[:500])\n                                st.json(doc.get('metadata', {}))\n
+    \                   \n                    with tab3:\n                        st.markdown(\"###
+    \U0001F504 Workflow Execution\")\n                        st.write(f\"**Original
+    Question:** {result['original_question']}\")\n                        \n                        if
+    result.get('transformation_history'):\n                            st.write(\"**Query
+    Transformations:**\")\n                            for i, query in enumerate(result['transformation_history'],
+    1):\n                                st.write(f\"{i}. {query}\")\n                        \n
+    \                       st.write(f\"**Final Question:** {result['question']}\")\n
+    \                       \n                        # Workflow diagram\n                        st.markdown(\"**Workflow
+    Steps:**\")\n                        st.markdown(\"\"\"\n                        1.
+    \U0001F50D **Hybrid Retrieval** (BM25 + Vector)\n                        2. \U0001F3AF
+    **Reranking** (Score sorting)\n                        3. \U0001F4CA **Grading**
+    (Relevance check)\n                        4. \U0001F916 **Generation** (LLM answer)\n
+    \                       5. \U0001F504 **Self-Correction** (If needed)\n                        \"\"\")\n
+    \                   \n                    with tab4:\n                        st.markdown(\"###
+    \U0001F4CB Pod Information\")\n                        \n                        col1,
+    col2 = st.columns(2)\n                        with col1:\n                            st.write(\"**Pod
+    Status:**\")\n                            st.json(pod_status)\n                        \n
+    \                       with col2:\n                            st.write(\"**Metadata:**\")\n
+    \                           st.json(result['metadata'])\n                        \n
+    \                       if logs:\n                            with st.expander(\"\U0001F4DD
+    Raw Logs\"):\n                                st.code(logs)\n                        \n
+    \                       if events:\n                            with st.expander(\"\U0001F4CB
+    Raw Events\"):\n                                st.code(events)\n                    \n
+    \                   with tab5:\n                        st.markdown(\"### \U0001F4CA
+    Analysis Metrics\")\n                        \n                        metrics
+    = result['metadata']\n                        \n                        col1,
+    col2, col3, col4 = st.columns(4)\n                        with col1:\n                            st.metric(\"Iterations\",
+    result['iterations'])\n                        with col2:\n                            st.metric(\"Docs
+    Retrieved\", metrics['num_docs_retrieved'])\n                        with col3:\n
+    \                           st.metric(\"Docs Relevant\", metrics['num_docs_relevant'])\n
+    \                       with col4:\n                            st.metric(\"Avg
+    Relevance\", f\"{metrics['avg_relevance']:.2f}\")\n                        \n
+    \                       st.markdown(\"**Performance:**\")\n                        st.write(f\"-
+    Multi-agent workflow completed in {result['iterations']} iterations\")\n                        st.write(f\"-
+    Retrieved {metrics['num_docs_retrieved']} documents\")\n                        st.write(f\"-
+    Filtered to {metrics['num_docs_relevant']} relevant documents\")\n                        st.write(f\"-
+    Average relevance score: {metrics['avg_relevance']:.2%}\")\n                \n
+    \               else:\n                    st.error(f\"❌ Analysis failed: {result.get('error',
+    'Unknown error')}\")\n                    \n            except Exception as e:\n
+    \               progress_bar.progress(100)\n                status_placeholder.error(\"❌
+    Analysis failed\")\n                st.error(f\"❌ Error during analysis: {str(e)}\")\n
+    \               import traceback\n                with st.expander(\"\U0001F41B
+    Error Details\"):\n                    st.code(traceback.format_exc())\n\n# Cluster
+    Health Overview (reusing v6 structure)\nst.markdown(\"---\")\nst.markdown(\"##
+    \U0001F3E5 Cluster Health Overview\")\n\ncol1, col2, col3 = st.columns(3)\n\nwith
+    col1:\n    try:\n        result = subprocess.run(['oc', 'get', 'nodes', '--no-headers'],
+    \n                              capture_output=True, text=True, timeout=30)\n
+    \       if result.returncode == 0:\n            nodes = result.stdout.strip().split('\\n')\n
+    \           ready_nodes = len([n for n in nodes if 'Ready' in n])\n            st.metric(\"Cluster
+    Nodes\", f\"{ready_nodes}/{len(nodes)} Ready\")\n    except:\n        st.metric(\"Cluster
+    Nodes\", \"N/A\")\n\nwith col2:\n    total_pods = sum([len(k8s_collector.get_pods_in_namespace(ns))
+    for ns in namespaces[:5]])\n    st.metric(\"Total Pods\", f\"~{total_pods} (sampled)\")\n\nwith
+    col3:\n    st.metric(\"Namespaces\", len(namespaces))\n\n# Footer\nst.markdown(\"---\")\nst.markdown(\"\"\"\n<div
+    style=\"text-align: center; color: #666; padding: 1rem;\">\n    <p>\U0001F3AF
+    AI Troubleshooter v7 - Multi-Agent Self-Corrective RAG | \n    Inspired by NVIDIA's
+    Log Analysis Architecture | \n    Powered by Llama Stack + LangGraph</p>\n</div>\n\"\"\",
+    unsafe_allow_html=True)\n"
+  graph_edges.py: "\"\"\"\nAI Troubleshooter v7 - Graph Edges\nConditional routing
+    logic for self-correction\n\"\"\"\n\nfrom typing import Literal\nfrom v7_state_schema
+    import GraphState\n\n\nclass Edge:\n    \"\"\"\n    Edge decision functions for
+    routing in the workflow\n    These implement the self-correction logic\n    \"\"\"\n
+    \   \n    @staticmethod\n    def decide_to_generate(\n        state: GraphState\n
+    \   ) -> Literal[\"generate\", \"transform_query\"]:\n        \"\"\"\n        DECISION
+    1: After grading, should we generate or transform query?\n        \n        Logic:\n
+    \       - If we have relevant documents → generate\n        - If no relevant documents
+    and haven't hit max iterations → transform_query\n        - If no relevant documents
+    and hit max iterations → generate (with empty context)\n        \n        Args:\n
+    \           state: Current graph state\n            \n        Returns:\n            \"generate\"
+    or \"transform_query\"\n        \"\"\"\n        print(\"\\n\U0001F914 DECISION:
+    Should we generate or transform query?\")\n        \n        reranked_docs = state.get(\"reranked_docs\",
+    [])\n        relevance_scores = state.get(\"relevance_scores\", [])\n        iteration
+    = state.get(\"iteration\", 0)\n        max_iterations = state.get(\"max_iterations\",
+    3)\n        \n        # Calculate relevance ratio\n        if relevance_scores:\n
+    \           avg_relevance = sum(relevance_scores) / len(relevance_scores)\n        else:\n
+    \           avg_relevance = 0.0\n        \n        num_relevant = len(reranked_docs)\n
+    \       \n        print(f\"   \U0001F4CA Relevant docs: {num_relevant}\")\n        print(f\"
+    \  \U0001F4CA Avg relevance: {avg_relevance:.2f}\")\n        print(f\"   \U0001F4CA
+    Iteration: {iteration}/{max_iterations}\")\n        \n        # Decision logic\n
+    \       if num_relevant == 0:\n            if iteration < max_iterations:\n                print(\"
+    \  ➡️  DECISION: No relevant docs, transform query and retry\")\n                return
+    \"transform_query\"\n            else:\n                print(\"   ➡️  DECISION:
+    Max iterations reached, generate with what we have\")\n                return
+    \"generate\"\n        \n        elif avg_relevance < 0.7 and num_relevant < 3:\n
+    \           if iteration < max_iterations:\n                print(\"   ➡️  DECISION:
+    Low relevance, transform query for better results\")\n                return \"transform_query\"\n
+    \           else:\n                print(\"   ➡️  DECISION: Max iterations reached,
+    generate answer\")\n                return \"generate\"\n        \n        else:\n
+    \           print(\"   ➡️  DECISION: Sufficient relevant docs, proceed to generate\")\n
+    \           return \"generate\"\n    \n    @staticmethod\n    def grade_generation_vs_documents_and_question(\n
+    \       state: GraphState\n    ) -> Literal[\"useful\", \"not useful\", \"not
+    supported\"]:\n        \"\"\"\n        DECISION 2: After generation, is the answer
+    good enough?\n        \n        Logic:\n        - Check if answer is useful and
+    supported by docs\n        - If not useful and haven't hit max iterations → transform_query\n
+    \       - If hit max iterations → accept answer\n        \n        Args:\n            state:
+    Current graph state\n            \n        Returns:\n            \"useful\", \"not
+    useful\", or \"not supported\"\n        \"\"\"\n        print(\"\\n\U0001F914
+    DECISION: Is the generated answer useful?\")\n        \n        generation = state.get(\"generation\",
+    \"\")\n        reranked_docs = state.get(\"reranked_docs\", [])\n        question
+    = state.get(\"question\", \"\")\n        iteration = state.get(\"iteration\",
+    0)\n        max_iterations = state.get(\"max_iterations\", 3)\n        \n        #
+    Simple heuristic checks\n        has_content = len(generation) > 100\n        has_docs
+    = len(reranked_docs) > 0\n        has_error_marker = \"❌\" in generation or \"error\"
+    in generation.lower()\n        \n        print(f\"   \U0001F4CA Answer length:
+    {len(generation)} chars\")\n        print(f\"   \U0001F4CA Has docs: {has_docs}\")\n
+    \       print(f\"   \U0001F4CA Iteration: {iteration}/{max_iterations}\")\n        \n
+    \       # If we hit max iterations, accept the answer\n        if iteration >=
+    max_iterations:\n            print(\"   ➡️  DECISION: Max iterations reached,
+    accepting answer (useful)\")\n            return \"useful\"\n        \n        #
+    Check if answer has content and is supported\n        if has_content and has_docs:\n
+    \           # Check if answer seems to address the question\n            question_keywords
+    = set(question.lower().split())\n            answer_keywords = set(generation.lower().split())\n
+    \           \n            # At least some overlap\n            overlap = len(question_keywords
+    & answer_keywords)\n            \n            if overlap > 2:\n                print(\"
+    \  ➡️  DECISION: Answer appears useful (useful)\")\n                return \"useful\"\n
+    \           else:\n                print(\"   ➡️  DECISION: Answer doesn't address
+    question well (not useful)\")\n                return \"not useful\"\n        \n
+    \       elif not has_docs:\n            print(\"   ➡️  DECISION: No supporting
+    documents (not supported)\")\n            return \"not supported\"\n        \n
+    \       else:\n            print(\"   ➡️  DECISION: Answer too short or incomplete
+    (not useful)\")\n            return \"not useful\"\n\n\ndef test_edge_decisions():\n
+    \   \"\"\"Test edge decision functions\"\"\"\n    \n    # Test 1: Good docs, should
+    generate\n    state1: GraphState = {\n        \"question\": \"Why is the pod failing?\",\n
+    \       \"namespace\": \"default\",\n        \"pod_name\": \"test-pod\",\n        \"time_window\":
+    30,\n        \"log_context\": \"\",\n        \"pod_events\": \"\",\n        \"pod_status\":
+    {},\n        \"retrieved_docs\": [{\"content\": \"doc1\"}, {\"content\": \"doc2\"}],\n
+    \       \"reranked_docs\": [{\"content\": \"doc1\"}, {\"content\": \"doc2\"}],\n
+    \       \"relevance_scores\": [1.0, 1.0],\n        \"generation\": \"\",\n        \"iteration\":
+    0,\n        \"max_iterations\": 3,\n        \"transformation_history\": [],\n
+    \       \"timestamp\": \"\",\n        \"data_source\": \"\"\n    }\n    \n    decision1
+    = Edge.decide_to_generate(state1)\n    print(f\"\\nTest 1 Result: {decision1}\")\n
+    \   assert decision1 == \"generate\", \"Should generate with good docs\"\n    \n
+    \   # Test 2: No docs, should transform\n    state2 = state1.copy()\n    state2[\"reranked_docs\"]
+    = []\n    state2[\"relevance_scores\"] = []\n    \n    decision2 = Edge.decide_to_generate(state2)\n
+    \   print(f\"\\nTest 2 Result: {decision2}\")\n    assert decision2 == \"transform_query\",
+    \"Should transform with no docs\"\n    \n    # Test 3: Max iterations, should
+    generate anyway\n    state3 = state2.copy()\n    state3[\"iteration\"] = 3\n    \n
+    \   decision3 = Edge.decide_to_generate(state3)\n    print(f\"\\nTest 3 Result:
+    {decision3}\")\n    assert decision3 == \"generate\", \"Should generate at max
+    iterations\"\n    \n    print(\"\\n✅ All edge tests passed!\")\n\n\nif __name__
+    == \"__main__\":\n    test_edge_decisions()\n\n"
+  graph_nodes.py: "\"\"\"\nAI Troubleshooter v7 - Graph Nodes\nImplements each step
+    of the multi-agent workflow\n\"\"\"\n\nimport os\nfrom typing import Dict, Any,
+    List\nfrom llama_stack_client import LlamaStackClient\nfrom v7_state_schema import
+    GraphState\nfrom v7_hybrid_retriever import HybridRetriever\nimport json\n\n\nclass
+    Nodes:\n    \"\"\"\n    Node implementations for the LangGraph workflow\n    Each
+    node is a specialized agent for a specific task\n    \"\"\"\n    \n    def __init__(\n
+    \       self,\n        llama_stack_url: str,\n        llama_model: str = \"llama-32-3b-instruct\",\n
+    \       vector_db_id: str = \"openshift-logs-v7\",\n        embedding_model: str
+    = \"granite-embedding-125m\"\n    ):\n        \"\"\"Initialize nodes with Llama
+    Stack client\"\"\"\n        self.llama_client = LlamaStackClient(base_url=llama_stack_url)\n
+    \       self.llama_model = llama_model\n        self.vector_db_id = vector_db_id\n
+    \       self.embedding_model = embedding_model\n        \n        # Initialize
+    hybrid retriever\n        self.retriever = HybridRetriever(\n            llama_stack_url=llama_stack_url,\n
+    \           vector_db_id=vector_db_id\n        )\n    \n    def retrieve(self,
+    state: GraphState) -> Dict[str, Any]:\n        \"\"\"\n        NODE 1: Hybrid
+    Retrieval\n        Retrieves relevant log snippets using BM25 + Vector search\n
+    \       \"\"\"\n        print(\"\\n\" + \"=\"*60)\n        print(\"\U0001F50D
+    NODE 1: RETRIEVE (Hybrid BM25 + Vector)\")\n        print(\"=\"*60)\n        \n
+    \       question = state[\"question\"]\n        log_context = state.get(\"log_context\",
+    \"\")\n        \n        # Build enhanced query with context\n        enhanced_query
+    = self._build_enhanced_query(question, log_context, state)\n        \n        print(f\"\U0001F4DD
+    Original Query: {question}\")\n        print(f\"\U0001F4DD Enhanced Query: {enhanced_query}\")\n
+    \       \n        # Perform hybrid retrieval\n        retrieved_docs = self.retriever.hybrid_retrieve(\n
+    \           query=enhanced_query,\n            k=10\n        )\n        \n        print(f\"✅
+    Retrieved {len(retrieved_docs)} documents\")\n        \n        return {\n            \"retrieved_docs\":
+    retrieved_docs,\n            \"question\": question  # Keep original question\n
+    \       }\n    \n    def rerank(self, state: GraphState) -> Dict[str, Any]:\n
+    \       \"\"\"\n        NODE 2: Reranking\n        Reranks retrieved documents
+    using Llama Stack reranking\n        \"\"\"\n        print(\"\\n\" + \"=\"*60)\n
+    \       print(\"\U0001F3AF NODE 2: RERANK\")\n        print(\"=\"*60)\n        \n
+    \       question = state[\"question\"]\n        retrieved_docs = state[\"retrieved_docs\"]\n
+    \       \n        if not retrieved_docs:\n            print(\"⚠️  No documents
+    to rerank\")\n            return {\"reranked_docs\": [], \"question\": question}\n
+    \       \n        try:\n            # Prepare documents for reranking\n            doc_contents
+    = [doc['content'] for doc in retrieved_docs]\n            \n            # Use
+    Llama Stack for reranking (if available)\n            # For now, we'll use the
+    existing scores and take top 5\n            # TODO: Integrate actual reranking
+    API when available\n            \n            # Sort by existing scores and take
+    top 5\n            reranked_docs = sorted(\n                retrieved_docs,\n
+    \               key=lambda x: x.get('score', 0),\n                reverse=True\n
+    \           )[:5]\n            \n            print(f\"✅ Reranked to top {len(reranked_docs)}
+    documents\")\n            \n            return {\n                \"reranked_docs\":
+    reranked_docs,\n                \"question\": question\n            }\n            \n
+    \       except Exception as e:\n            print(f\"❌ Reranking error: {e}\")\n
+    \           # Fallback: just take top 5 by score\n            top_docs = sorted(\n
+    \               retrieved_docs,\n                key=lambda x: x.get('score',
+    0),\n                reverse=True\n            )[:5]\n            return {\"reranked_docs\":
+    top_docs, \"question\": question}\n    \n    def grade_documents(self, state:
+    GraphState) -> Dict[str, Any]:\n        \"\"\"\n        NODE 3: Grade Documents\n
+    \       Scores each document for relevance to the question\n        \"\"\"\n        print(\"\\n\"
+    + \"=\"*60)\n        print(\"\U0001F4CA NODE 3: GRADE DOCUMENTS\")\n        print(\"=\"*60)\n
+    \       \n        question = state[\"question\"]\n        reranked_docs = state[\"reranked_docs\"]\n
+    \       \n        if not reranked_docs:\n            print(\"⚠️  No documents
+    to grade\")\n            return {\n                \"reranked_docs\": [],\n                \"relevance_scores\":
+    [],\n                \"question\": question\n            }\n        \n        #
+    Grade each document\n        filtered_docs = []\n        relevance_scores = []\n
+    \       \n        for i, doc in enumerate(reranked_docs):\n            print(f\"\\n\U0001F4C4
+    Grading document {i+1}/{len(reranked_docs)}...\")\n            \n            #
+    Build grading prompt\n            grading_prompt = f\"\"\"You are a log analysis
+    expert. Grade the relevance of this log snippet to the question.\n\nQuestion:
+    {question}\n\nLog Snippet:\n{doc['content'][:500]}\n\nIs this log snippet relevant
+    to answering the question?\nRespond with ONLY 'yes' or 'no' followed by a brief
+    reason.\n\nFormat: yes/no | reason\n\"\"\"\n            \n            try:\n                #
+    Use LLM for grading\n                response = self.llama_client.inference.chat_completion(\n
+    \                   model_id=self.llama_model,\n                    messages=[\n
+    \                       {\"role\": \"user\", \"content\": grading_prompt}\n                    ],\n
+    \                   sampling_params={\n                        \"strategy\": {\"type\":
+    \"greedy\"},\n                        \"max_tokens\": 100\n                    }\n
+    \               )\n                \n                grade_text = response.completion_message.content.lower()\n
+    \               \n                # Parse response\n                if 'yes' in
+    grade_text:\n                    print(f\"   ✅ RELEVANT\")\n                    filtered_docs.append(doc)\n
+    \                   relevance_scores.append(1.0)\n                else:\n                    print(f\"
+    \  ❌ NOT RELEVANT\")\n                    relevance_scores.append(0.0)\n                    \n
+    \           except Exception as e:\n                print(f\"   ⚠️  Grading error:
+    {e}, assuming relevant\")\n                filtered_docs.append(doc)\n                relevance_scores.append(0.5)\n
+    \       \n        print(f\"\\n✅ Filtered to {len(filtered_docs)}/{len(reranked_docs)}
+    relevant documents\")\n        \n        return {\n            \"reranked_docs\":
+    filtered_docs,\n            \"relevance_scores\": relevance_scores,\n            \"question\":
+    question\n        }\n    \n    def generate(self, state: GraphState) -> Dict[str,
+    Any]:\n        \"\"\"\n        NODE 4: Generate Answer\n        Generates final
+    answer using LLM with context\n        \"\"\"\n        print(\"\\n\" + \"=\"*60)\n
+    \       print(\"\U0001F916 NODE 4: GENERATE ANSWER\")\n        print(\"=\"*60)\n
+    \       \n        question = state[\"question\"]\n        reranked_docs = state[\"reranked_docs\"]\n
+    \       namespace = state.get(\"namespace\", \"unknown\")\n        pod_name =
+    state.get(\"pod_name\", \"\")\n        \n        if not reranked_docs:\n            generation
+    = \"❌ No relevant log data found to answer the question. Please try rephrasing
+    or check if logs are available.\"\n            return {\"generation\": generation,
+    \"question\": question}\n        \n        # Build context from documents\n        context_parts
+    = []\n        for i, doc in enumerate(reranked_docs, 1):\n            context_parts.append(f\"**Log
+    Snippet {i}** (Score: {doc.get('score', 0):.3f}):\\n{doc['content']}\\n\")\n        \n
+    \       context = \"\\n\".join(context_parts)\n        \n        # System prompt
+    for OpenShift troubleshooting\n        system_prompt = \"\"\"You are a senior
+    OpenShift SRE analyzing logs to troubleshoot issues.\n\nProvide a concise, actionable
+    analysis in this format:\n\n\U0001F6A8 **ISSUE**: [One-line summary]\n\U0001F4CB
+    **ROOT CAUSE**: [Based on log evidence]\n⚡ **IMMEDIATE ACTIONS**: [Specific oc
+    commands or fixes]\n\U0001F527 **RESOLUTION**: [Step-by-step fix]\n\nFocus on:\n-
+    Specific error codes and patterns\n- Actionable oc commands\n- Clear root cause
+    identification\n- Maximum 200 words\n\"\"\"\n        \n        # User prompt\n
+    \       user_prompt = f\"\"\"Analyze this OpenShift issue:\n\n**Namespace**: {namespace}\n**Pod**:
+    {pod_name or \"All pods\"}\n**Question**: {question}\n\n**Log Evidence**:\n{context}\n\nProvide
+    your analysis in the format specified.\n\"\"\"\n        \n        try:\n            #
+    Generate answer\n            response = self.llama_client.inference.chat_completion(\n
+    \               model_id=self.llama_model,\n                messages=[\n                    {\"role\":
+    \"system\", \"content\": system_prompt},\n                    {\"role\": \"user\",
+    \"content\": user_prompt}\n                ],\n                sampling_params={\n
+    \                   \"strategy\": {\"type\": \"greedy\"},\n                    \"max_tokens\":
+    500\n                }\n            )\n            \n            generation =
+    response.completion_message.content\n            \n            # Add metadata\n
+    \           generation += f\"\\n\\n---\\n**\U0001F3AF Analysis Metadata**:\\n\"\n
+    \           generation += f\"- **Model**: {self.llama_model}\\n\"\n            generation
+    += f\"- **Evidence**: {len(reranked_docs)} log snippets\\n\"\n            generation
+    += f\"- **Iteration**: {state.get('iteration', 0)}\\n\"\n            \n            print(f\"✅
+    Generated answer ({len(generation)} chars)\")\n            \n            return
+    {\"generation\": generation, \"question\": question}\n            \n        except
+    Exception as e:\n            error_msg = f\"❌ Generation error: {str(e)}\"\n            print(error_msg)\n
+    \           return {\"generation\": error_msg, \"question\": question}\n    \n
+    \   def transform_query(self, state: GraphState) -> Dict[str, Any]:\n        \"\"\"\n
+    \       NODE 5: Transform Query\n        Rewrites the query for better retrieval
+    (self-correction)\n        \"\"\"\n        print(\"\\n\" + \"=\"*60)\n        print(\"\U0001F504
+    NODE 5: TRANSFORM QUERY (Self-Correction)\")\n        print(\"=\"*60)\n        \n
+    \       original_question = state[\"question\"]\n        iteration = state.get(\"iteration\",
+    0) + 1\n        log_context = state.get(\"log_context\", \"\")\n        \n        print(f\"\U0001F4DD
+    Original Question: {original_question}\")\n        print(f\"\U0001F501 Iteration:
+    {iteration}\")\n        \n        # Build transformation prompt\n        transform_prompt
+    = f\"\"\"You are helping refine a log analysis query that didn't retrieve good
+    results.\n\nOriginal Question: {original_question}\n\nContext: This is for OpenShift/Kubernetes
+    log analysis.\n\nRewrite this question to be more specific and focused on log
+    patterns, error codes, or component names.\nMake it more likely to match actual
+    log entries.\n\nReturn ONLY the rewritten question, nothing else.\n\"\"\"\n        \n
+    \       try:\n            response = self.llama_client.inference.chat_completion(\n
+    \               model_id=self.llama_model,\n                messages=[\n                    {\"role\":
+    \"user\", \"content\": transform_prompt}\n                ],\n                sampling_params={\n
+    \                   \"strategy\": {\"type\": \"greedy\"},\n                    \"max_tokens\":
+    100\n                }\n            )\n            \n            new_question
+    = response.completion_message.content.strip()\n            \n            # Track
+    transformation history\n            transformation_history = state.get(\"transformation_history\",
+    [])\n            transformation_history.append(original_question)\n            \n
+    \           print(f\"\U0001F4DD New Question: {new_question}\")\n            \n
+    \           return {\n                \"question\": new_question,\n                \"iteration\":
+    iteration,\n                \"transformation_history\": transformation_history\n
+    \           }\n            \n        except Exception as e:\n            print(f\"❌
+    Transformation error: {e}, keeping original question\")\n            return {\n
+    \               \"question\": original_question,\n                \"iteration\":
+    iteration\n            }\n    \n    def _build_enhanced_query(\n        self,\n
+    \       question: str,\n        log_context: str,\n        state: GraphState\n
+    \   ) -> str:\n        \"\"\"\n        Build enhanced query with additional context\n
+    \       \"\"\"\n        enhanced_parts = [question]\n        \n        # Add pod
+    name if available\n        if state.get(\"pod_name\"):\n            enhanced_parts.append(f\"pod:{state['pod_name']}\")\n
+    \       \n        # Add namespace\n        if state.get(\"namespace\"):\n            enhanced_parts.append(f\"namespace:{state['namespace']}\")\n
+    \       \n        # Extract key terms from log context (errors, statuses)\n        if
+    log_context:\n            # Look for common error patterns\n            error_patterns
+    = [\n                'error', 'failed', 'crash', 'oom', 'timeout',\n                'backoff',
+    'terminated', 'killed', 'unavailable'\n            ]\n            for pattern
+    in error_patterns:\n                if pattern in log_context.lower():\n                    enhanced_parts.append(pattern)\n
+    \       \n        return \" \".join(enhanced_parts)\n\n\n# Singleton instance
+    (will be initialized in main workflow)\n_nodes_instance = None\n\ndef get_nodes_instance(llama_stack_url:
+    str = None) -> Nodes:\n    \"\"\"Get or create nodes instance\"\"\"\n    global
+    _nodes_instance\n    if _nodes_instance is None:\n        if llama_stack_url is
+    None:\n            llama_stack_url = os.getenv(\n                \"LLAMA_STACK_URL\",\n
+    \               \"http://llamastack-custom-distribution-service.model.svc.cluster.local:8321\"\n
+    \           )\n        _nodes_instance = Nodes(llama_stack_url=llama_stack_url)\n
+    \   return _nodes_instance\n\n"
+  hybrid_retriever.py: "\"\"\"\nAI Troubleshooter v7 - Hybrid Retriever\nCombines
+    BM25 (lexical) + Milvus via Llama Stack (semantic)\n\"\"\"\n\nimport os\nfrom
+    typing import List, Dict, Any\nfrom rank_bm25 import BM25Okapi\nfrom llama_stack_client
+    import LlamaStackClient\nfrom llama_stack_client.types import RAGDocument\nimport
+    re\n\n\nclass HybridRetriever:\n    \"\"\"\n    Hybrid retrieval combining:\n
+    \   1. BM25: Lexical/keyword matching (exact error codes, pod names)\n    2. Milvus
+    + Granite Embeddings: Semantic similarity\n    \n    Inspired by NVIDIA's approach
+    but adapted for OpenShift + Llama Stack\n    \"\"\"\n    \n    def __init__(\n
+    \       self,\n        llama_stack_url: str,\n        vector_db_id: str = \"openshift-logs-v7\",\n
+    \       alpha: float = 0.5  # Weight: 0.5 = equal weight to BM25 and vector\n
+    \   ):\n        \"\"\"\n        Initialize hybrid retriever\n        \n        Args:\n
+    \           llama_stack_url: URL to Llama Stack service\n            vector_db_id:
+    Vector database ID for logs\n            alpha: Weight for combining scores (0-1)\n
+    \                 0 = all BM25, 1 = all vector, 0.5 = equal\n        \"\"\"\n
+    \       self.llama_client = LlamaStackClient(base_url=llama_stack_url)\n        self.vector_db_id
+    = vector_db_id\n        self.alpha = alpha\n        \n        # BM25 index (built
+    from logs)\n        self.bm25_index = None\n        self.bm25_corpus = []\n        self.doc_metadata
+    = []\n        \n    def build_bm25_index(self, documents: List[Dict[str, Any]]):\n
+    \       \"\"\"\n        Build BM25 index from documents\n        \n        Args:\n
+    \           documents: List of log documents with 'content' and 'metadata'\n        \"\"\"\n
+    \       print(f\"\U0001F4CA Building BM25 index from {len(documents)} documents...\")\n
+    \       \n        # Tokenize documents for BM25\n        tokenized_corpus = []\n
+    \       self.bm25_corpus = []\n        self.doc_metadata = []\n        \n        for
+    doc in documents:\n            content = doc.get('content', '')\n            self.bm25_corpus.append(content)\n
+    \           self.doc_metadata.append(doc.get('metadata', {}))\n            \n
+    \           # Simple tokenization (can be improved)\n            tokens = self._tokenize(content)\n
+    \           tokenized_corpus.append(tokens)\n        \n        # Build BM25 index\n
+    \       self.bm25_index = BM25Okapi(tokenized_corpus)\n        print(f\"✅ BM25
+    index built with {len(tokenized_corpus)} documents\")\n    \n    def _tokenize(self,
+    text: str) -> List[str]:\n        \"\"\"\n        Simple tokenization for BM25\n
+    \       Preserves important log patterns like error codes, IPs, etc.\n        \"\"\"\n
+    \       # Lowercase and split on whitespace/punctuation\n        # But preserve
+    error codes like \"HTTP 503\", \"ImagePullBackOff\"\n        text = text.lower()\n
+    \       tokens = re.findall(r'\\b\\w+\\b', text)\n        return tokens\n    \n
+    \   def retrieve_bm25(self, query: str, k: int = 10) -> List[Dict[str, Any]]:\n
+    \       \"\"\"\n        Retrieve documents using BM25 lexical matching\n        \n
+    \       Args:\n            query: Search query\n            k: Number of documents
+    to retrieve\n            \n        Returns:\n            List of documents with
+    BM25 scores\n        \"\"\"\n        if self.bm25_index is None:\n            print(\"⚠️
+    \ BM25 index not built yet\")\n            return []\n        \n        # Tokenize
+    query\n        query_tokens = self._tokenize(query)\n        \n        # Get BM25
+    scores\n        bm25_scores = self.bm25_index.get_scores(query_tokens)\n        \n
+    \       # Get top-k indices\n        top_indices = sorted(\n            range(len(bm25_scores)),\n
+    \           key=lambda i: bm25_scores[i],\n            reverse=True\n        )[:k]\n
+    \       \n        # Build results\n        results = []\n        for idx in top_indices:\n
+    \           if bm25_scores[idx] > 0:  # Only include non-zero scores\n                results.append({\n
+    \                   'content': self.bm25_corpus[idx],\n                    'score':
+    float(bm25_scores[idx]),\n                    'retrieval_method': 'bm25',\n                    'metadata':
+    self.doc_metadata[idx]\n                })\n        \n        print(f\"\U0001F50D
+    BM25 retrieved {len(results)} documents\")\n        return results\n    \n    def
+    retrieve_vector(self, query: str, k: int = 10) -> List[Dict[str, Any]]:\n        \"\"\"\n
+    \       Retrieve documents using Milvus vector search via Llama Stack\n        \n
+    \       Args:\n            query: Search query\n            k: Number of documents
+    to retrieve\n            \n        Returns:\n            List of documents with
+    similarity scores\n        \"\"\"\n        try:\n            # Use Llama Stack
+    RAG tool for vector search\n            response = self.llama_client.tool_runtime.rag_tool.query(\n
+    \               content=query,\n                vector_db_ids=[self.vector_db_id],\n
+    \               query_config={\"max_chunks\": k}\n            )\n            \n
+    \           # Format results\n            results = []\n            for i, chunk
+    in enumerate(response.chunks):\n                results.append({\n                    'content':
+    chunk.content,\n                    'score': getattr(chunk, 'score', 0.0),\n                    'retrieval_method':
+    'vector',\n                    'metadata': chunk.metadata if hasattr(chunk, 'metadata')
+    else {}\n                })\n            \n            print(f\"\U0001F50D Vector
+    search retrieved {len(results)} documents\")\n            return results\n            \n
+    \       except Exception as e:\n            print(f\"❌ Vector retrieval error:
+    {e}\")\n            return []\n    \n    def hybrid_retrieve(self, query: str,
+    k: int = 10) -> List[Dict[str, Any]]:\n        \"\"\"\n        Hybrid retrieval
+    combining BM25 and vector search\n        Uses Reciprocal Rank Fusion (RRF) for
+    score combination\n        \n        Args:\n            query: Search query\n
+    \           k: Number of documents to retrieve\n            \n        Returns:\n
+    \           Combined ranked list of documents\n        \"\"\"\n        print(f\"\\n\U0001F504
+    Hybrid Retrieval for: '{query}'\")\n        \n        # Retrieve from both sources\n
+    \       bm25_results = self.retrieve_bm25(query, k=k*2)  # Get more for fusion\n
+    \       vector_results = self.retrieve_vector(query, k=k*2)\n        \n        #
+    Combine using Reciprocal Rank Fusion\n        fused_results = self._reciprocal_rank_fusion(\n
+    \           bm25_results,\n            vector_results,\n            k=k\n        )\n
+    \       \n        print(f\"✅ Hybrid retrieval returned {len(fused_results)} documents\")\n
+    \       return fused_results\n    \n    def _reciprocal_rank_fusion(\n        self,\n
+    \       bm25_results: List[Dict[str, Any]],\n        vector_results: List[Dict[str,
+    Any]],\n        k: int = 10,\n        rrf_k: int = 60  # RRF constant\n    ) ->
+    List[Dict[str, Any]]:\n        \"\"\"\n        Reciprocal Rank Fusion: Combines
+    rankings from multiple retrievers\n        \n        RRF Formula: score = Σ(1
+    / (k + rank))\n        \n        This is more robust than simple score averaging\n
+    \       \"\"\"\n        # Build document lookup with RRF scores\n        doc_scores
+    = {}\n        \n        # Process BM25 results\n        for rank, doc in enumerate(bm25_results,
+    start=1):\n            content = doc['content']\n            rrf_score = 1.0 /
+    (rrf_k + rank)\n            \n            if content not in doc_scores:\n                doc_scores[content]
+    = {\n                    'content': content,\n                    'rrf_score':
+    0.0,\n                    'bm25_score': doc.get('score', 0.0),\n                    'vector_score':
+    0.0,\n                    'metadata': doc.get('metadata', {})\n                }\n
+    \           \n            doc_scores[content]['rrf_score'] += rrf_score * (1 -
+    self.alpha)\n            doc_scores[content]['bm25_score'] = doc.get('score',
+    0.0)\n        \n        # Process vector results\n        for rank, doc in enumerate(vector_results,
+    start=1):\n            content = doc['content']\n            rrf_score = 1.0 /
+    (rrf_k + rank)\n            \n            if content not in doc_scores:\n                doc_scores[content]
+    = {\n                    'content': content,\n                    'rrf_score':
+    0.0,\n                    'bm25_score': 0.0,\n                    'vector_score':
+    doc.get('score', 0.0),\n                    'metadata': doc.get('metadata', {})\n
+    \               }\n            \n            doc_scores[content]['rrf_score']
+    += rrf_score * self.alpha\n            doc_scores[content]['vector_score'] = doc.get('score',
+    0.0)\n        \n        # Sort by RRF score and return top-k\n        sorted_docs
+    = sorted(\n            doc_scores.values(),\n            key=lambda x: x['rrf_score'],\n
+    \           reverse=True\n        )[:k]\n        \n        # Add retrieval method\n
+    \       for doc in sorted_docs:\n            doc['retrieval_method'] = 'hybrid'\n
+    \           doc['score'] = doc['rrf_score']\n        \n        return sorted_docs\n\n\ndef
+    test_hybrid_retriever():\n    \"\"\"Test function for hybrid retriever\"\"\"\n
+    \   import os\n    \n    # Initialize\n    llama_stack_url = os.getenv(\n        \"LLAMA_STACK_URL\",\n
+    \       \"http://llamastack-custom-distribution-service.model.svc.cluster.local:8321\"\n
+    \   )\n    \n    retriever = HybridRetriever(llama_stack_url)\n    \n    # Sample
+    documents (would come from log collector)\n    sample_docs = [\n        {\n            'content':
+    'Pod ai-troubleshooter-gui-v6-abc123 failed with ImagePullBackOff',\n            'metadata':
+    {'namespace': 'ai-troubleshooter-v6', 'type': 'error'}\n        },\n        {\n
+    \           'content': 'Container exited with code 137 (OOMKilled)',\n            'metadata':
+    {'namespace': 'default', 'type': 'error'}\n        },\n        {\n            'content':
+    'HTTP 503 Service Unavailable from llama-stack service',\n            'metadata':
+    {'namespace': 'model', 'type': 'error'}\n        }\n    ]\n    \n    # Build BM25
+    index\n    retriever.build_bm25_index(sample_docs)\n    \n    # Test retrieval\n
+    \   query = \"pod failed to start\"\n    results = retriever.hybrid_retrieve(query,
+    k=5)\n    \n    print(\"\\n\U0001F4CA Results:\")\n    for i, result in enumerate(results,
+    1):\n        print(f\"{i}. {result['content'][:100]}...\")\n        print(f\"
+    \  Score: {result['score']:.4f} | Method: {result['retrieval_method']}\")\n\n\nif
+    __name__ == \"__main__\":\n    test_hybrid_retriever()\n\n"
+  log_collector.py: "\"\"\"\nAI Troubleshooter v7 - Log Collector\nCollects logs from
+    OpenShift and indexes them for retrieval\n\"\"\"\n\nimport os\nimport subprocess\nimport
+    json\nfrom typing import List, Dict, Any, Optional\nfrom datetime import datetime,
+    timedelta\nfrom llama_stack_client import LlamaStackClient\nfrom llama_stack_client.types
+    import RAGDocument\nfrom v7_hybrid_retriever import HybridRetriever\n\n\nclass
+    OpenShiftLogCollector:\n    \"\"\"\n    Collects logs from OpenShift using MCP
+    or oc commands\n    Indexes them into Milvus (via Llama Stack) + BM25\n    \"\"\"\n
+    \   \n    def __init__(\n        self,\n        llama_stack_url: str,\n        vector_db_id:
+    str = \"openshift-logs-v7\",\n        namespaces: List[str] = None,\n        use_mcp:
+    bool = True\n    ):\n        \"\"\"\n        Initialize log collector\n        \n
+    \       Args:\n            llama_stack_url: URL to Llama Stack service\n            vector_db_id:
+    Vector database ID\n            namespaces: List of namespaces to collect from\n
+    \           use_mcp: Use MCP functions (True) or oc commands (False)\n        \"\"\"\n
+    \       self.llama_client = LlamaStackClient(base_url=llama_stack_url)\n        self.vector_db_id
+    = vector_db_id\n        self.namespaces = namespaces or [\"default\"]\n        self.use_mcp
+    = use_mcp\n        \n        # Initialize hybrid retriever\n        self.retriever
+    = HybridRetriever(\n            llama_stack_url=llama_stack_url,\n            vector_db_id=vector_db_id\n
+    \       )\n        \n        print(f\"\U0001F527 Log Collector initialized\")\n
+    \       print(f\"   \U0001F4CA Vector DB: {vector_db_id}\")\n        print(f\"
+    \  \U0001F4C1 Namespaces: {namespaces}\")\n        print(f\"   \U0001F50C Data
+    Source: {'MCP' if use_mcp else 'oc commands'}\")\n    \n    def _detect_mcp_environment(self)
+    -> bool:\n        \"\"\"Check if MCP functions are available\"\"\"\n        try:\n
+    \           # This would be replaced with actual MCP detection\n            #
+    For now, return False (will use oc commands)\n            return False\n        except:\n
+    \           return False\n    \n    def collect_pod_logs(\n        self,\n        namespace:
+    str,\n        pod_name: str,\n        tail_lines: int = 100\n    ) -> str:\n        \"\"\"\n
+    \       Collect logs from a specific pod\n        \n        Args:\n            namespace:
+    Kubernetes namespace\n            pod_name: Pod name\n            tail_lines:
+    Number of lines to retrieve\n            \n        Returns:\n            Log content
+    as string\n        \"\"\"\n        try:\n            if self.use_mcp:\n                #
+    Use MCP function (if available)\n                # logs = mcp_kubernetes_pods_log(name=pod_name,
+    namespace=namespace)\n                # For now, fall back to oc\n                pass\n
+    \           \n            # Fall back to oc command\n            result = subprocess.run(\n
+    \               ['oc', 'logs', pod_name, '-n', namespace, f'--tail={tail_lines}'],\n
+    \               capture_output=True,\n                text=True,\n                timeout=30\n
+    \           )\n            \n            if result.returncode == 0:\n                return
+    result.stdout\n            else:\n                print(f\"   ⚠️  Failed to get
+    logs for {pod_name}: {result.stderr}\")\n                return \"\"\n                \n
+    \       except Exception as e:\n            print(f\"   ❌ Error collecting logs
+    for {pod_name}: {e}\")\n            return \"\"\n    \n    def collect_pod_events(self,
+    namespace: str, pod_name: str) -> str:\n        \"\"\"Collect events related to
+    a pod\"\"\"\n        try:\n            result = subprocess.run(\n                ['oc',
+    'get', 'events', '-n', namespace,\n                 f'--field-selector=involvedObject.name={pod_name}',\n
+    \                '--sort-by=.lastTimestamp'],\n                capture_output=True,\n
+    \               text=True,\n                timeout=30\n            )\n            \n
+    \           if result.returncode == 0:\n                return result.stdout\n
+    \           else:\n                return \"\"\n                \n        except
+    Exception as e:\n            print(f\"   ❌ Error collecting events: {e}\")\n            return
+    \"\"\n    \n    def collect_namespace_logs(\n        self,\n        namespace:
+    str,\n        time_window_minutes: int = 30\n    ) -> List[Dict[str, Any]]:\n
+    \       \"\"\"\n        Collect all logs from a namespace\n        \n        Args:\n
+    \           namespace: Kubernetes namespace\n            time_window_minutes:
+    Only collect logs from last N minutes\n            \n        Returns:\n            List
+    of log documents\n        \"\"\"\n        print(f\"\\n\U0001F4E6 Collecting logs
+    from namespace: {namespace}\")\n        \n        all_logs = []\n        \n        #
+    Get list of pods\n        try:\n            result = subprocess.run(\n                ['oc',
+    'get', 'pods', '-n', namespace, '-o', 'json'],\n                capture_output=True,\n
+    \               text=True,\n                timeout=30\n            )\n            \n
+    \           if result.returncode != 0:\n                print(f\"   ❌ Failed to
+    list pods in {namespace}\")\n                return all_logs\n            \n            pods_data
+    = json.loads(result.stdout)\n            pods = pods_data.get('items', [])\n            \n
+    \           print(f\"   \U0001F4CA Found {len(pods)} pods\")\n            \n            #
+    Collect logs from each pod\n            for pod in pods:\n                pod_name
+    = pod['metadata']['name']\n                pod_status = pod.get('status', {}).get('phase',
+    'Unknown')\n                \n                print(f\"   \U0001F433 Collecting
+    from pod: {pod_name} ({pod_status})\")\n                \n                # Get
+    pod logs\n                logs = self.collect_pod_logs(namespace, pod_name, tail_lines=100)\n
+    \               \n                # Get pod events\n                events = self.collect_pod_events(namespace,
+    pod_name)\n                \n                # Get pod status\n                pod_status_info
+    = pod.get('status', {})\n                \n                # Create log document\n
+    \               if logs or events:\n                    log_doc = {\n                        'content':
+    f\"\"\"\n**Pod**: {pod_name}\n**Namespace**: {namespace}\n**Status**: {pod_status}\n\n**Logs:**\n{logs}\n\n**Events:**\n{events}\n\n**Status
+    Info:**\n{json.dumps(pod_status_info, indent=2)}\n\"\"\",\n                        'metadata':
+    {\n                            'namespace': namespace,\n                            'pod_name':
+    pod_name,\n                            'pod_status': pod_status,\n                            'timestamp':
+    datetime.now().isoformat(),\n                            'log_type': 'pod_logs_and_events'\n
+    \                       }\n                    }\n                    \n                    all_logs.append(log_doc)\n
+    \           \n            print(f\"   ✅ Collected {len(all_logs)} log documents\")\n
+    \           \n        except Exception as e:\n            print(f\"   ❌ Error
+    collecting namespace logs: {e}\")\n        \n        return all_logs\n    \n    def
+    collect_all_logs(self) -> List[Dict[str, Any]]:\n        \"\"\"Collect logs from
+    all configured namespaces\"\"\"\n        print(f\"\\n\U0001F504 Collecting logs
+    from {len(self.namespaces)} namespaces...\")\n        \n        all_logs = []\n
+    \       \n        for namespace in self.namespaces:\n            namespace_logs
+    = self.collect_namespace_logs(namespace)\n            all_logs.extend(namespace_logs)\n
+    \       \n        print(f\"\\n✅ Total collected: {len(all_logs)} log documents\")\n
+    \       \n        return all_logs\n    \n    def ingest_to_vector_db(self, log_documents:
+    List[Dict[str, Any]]):\n        \"\"\"\n        Ingest log documents into Milvus
+    via Llama Stack\n        \n        Args:\n            log_documents: List of log
+    documents to ingest\n        \"\"\"\n        print(f\"\\n\U0001F4CA Ingesting
+    {len(log_documents)} documents into vector DB...\")\n        \n        try:\n
+    \           # Prepare RAG documents\n            rag_docs = []\n            for
+    i, doc in enumerate(log_documents):\n                rag_doc = RAGDocument(\n
+    \                   document_id=f\"log-{i}-{datetime.now().timestamp()}\",\n                    content=doc['content'],\n
+    \                   metadata=doc.get('metadata', {})\n                )\n                rag_docs.append(rag_doc)\n
+    \           \n            # Ingest to Llama Stack\n            self.llama_client.tool_runtime.rag_tool.insert(\n
+    \               documents=rag_docs,\n                vector_db_id=self.vector_db_id,\n
+    \               chunk_size_in_tokens=512\n            )\n            \n            print(f\"✅
+    Successfully ingested to vector DB: {self.vector_db_id}\")\n            \n        except
+    Exception as e:\n            print(f\"❌ Failed to ingest to vector DB: {e}\")\n
+    \   \n    def build_bm25_index(self, log_documents: List[Dict[str, Any]]):\n        \"\"\"\n
+    \       Build BM25 index from log documents\n        \n        Args:\n            log_documents:
+    List of log documents\n        \"\"\"\n        print(f\"\\n\U0001F4CA Building
+    BM25 index from {len(log_documents)} documents...\")\n        \n        try:\n
+    \           self.retriever.build_bm25_index(log_documents)\n            print(f\"✅
+    BM25 index built successfully\")\n        except Exception as e:\n            print(f\"❌
+    Failed to build BM25 index: {e}\")\n    \n    def index_logs(self, log_documents:
+    List[Dict[str, Any]]):\n        \"\"\"\n        Index logs into both vector DB
+    and BM25\n        \n        Args:\n            log_documents: List of log documents\n
+    \       \"\"\"\n        print(f\"\\n\U0001F504 Indexing {len(log_documents)} log
+    documents...\")\n        \n        # Ingest to vector DB (Milvus)\n        self.ingest_to_vector_db(log_documents)\n
+    \       \n        # Build BM25 index\n        self.build_bm25_index(log_documents)\n
+    \       \n        print(f\"\\n✅ Indexing complete!\")\n    \n    def run_collection_cycle(self):\n
+    \       \"\"\"Run a complete collection and indexing cycle\"\"\"\n        print(\"\\n\"
+    + \"=\"*80)\n        print(\"\U0001F504 LOG COLLECTION CYCLE\")\n        print(\"=\"*80)\n
+    \       \n        # Collect logs\n        logs = self.collect_all_logs()\n        \n
+    \       if not logs:\n            print(\"⚠️  No logs collected\")\n            return\n
+    \       \n        # Index logs\n        self.index_logs(logs)\n        \n        print(\"\\n\"
+    + \"=\"*80)\n        print(\"✅ COLLECTION CYCLE COMPLETE\")\n        print(\"=\"*80)\n\n\ndef
+    setup_log_collection_job(\n    namespaces: List[str],\n    interval_minutes: int
+    = 15,\n    llama_stack_url: str = None\n):\n    \"\"\"\n    Setup periodic log
+    collection (to be run as a cron job)\n    \n    Args:\n        namespaces: List
+    of namespaces to collect from\n        interval_minutes: Collection interval\n
+    \       llama_stack_url: Llama Stack URL\n    \"\"\"\n    import time\n    \n
+    \   if llama_stack_url is None:\n        llama_stack_url = os.getenv(\n            \"LLAMA_STACK_URL\",\n
+    \           \"http://llamastack-custom-distribution-service.model.svc.cluster.local:8321\"\n
+    \       )\n    \n    collector = OpenShiftLogCollector(\n        llama_stack_url=llama_stack_url,\n
+    \       namespaces=namespaces\n    )\n    \n    print(f\"\U0001F504 Starting log
+    collection job (interval: {interval_minutes} min)\")\n    \n    while True:\n
+    \       try:\n            collector.run_collection_cycle()\n        except Exception
+    as e:\n            print(f\"❌ Collection cycle error: {e}\")\n        \n        print(f\"\\n⏳
+    Waiting {interval_minutes} minutes until next collection...\")\n        time.sleep(interval_minutes
+    * 60)\n\n\n# Example usage\nif __name__ == \"__main__\":\n    # Example: Collect
+    logs from specific namespaces\n    collector = OpenShiftLogCollector(\n        llama_stack_url=\"http://llamastack-custom-distribution-service.model.svc.cluster.local:8321\",\n
+    \       namespaces=[\"ai-troubleshooter-v6\", \"model\", \"default\"]\n    )\n
+    \   \n    # Run one collection cycle\n    collector.run_collection_cycle()\n\n"
+  main_graph.py: "\"\"\"\nAI Troubleshooter v7 - Main LangGraph Workflow\nMulti-Agent
+    Self-Corrective RAG System for OpenShift Log Analysis\n\"\"\"\n\nimport os\nfrom
+    langgraph.graph import END, StateGraph, START\nfrom v7_state_schema import GraphState\nfrom
+    v7_graph_nodes import Nodes, get_nodes_instance\nfrom v7_graph_edges import Edge\nfrom
+    datetime import datetime\n\n\ndef create_workflow(\n    llama_stack_url: str =
+    None,\n    max_iterations: int = 3\n) -> StateGraph:\n    \"\"\"\n    Create the
+    LangGraph workflow for log analysis\n    \n    Args:\n        llama_stack_url:
+    URL to Llama Stack service\n        max_iterations: Maximum self-correction iterations
+    (default: 3)\n        \n    Returns:\n        Compiled StateGraph application\n
+    \   \"\"\"\n    print(\"\U0001F3D7️  Building Multi-Agent Log Analysis Workflow...\")\n
+    \   \n    # Initialize nodes\n    if llama_stack_url is None:\n        llama_stack_url
+    = os.getenv(\n            \"LLAMA_STACK_URL\",\n            \"http://llamastack-custom-distribution-service.model.svc.cluster.local:8321\"\n
+    \       )\n    \n    nodes = get_nodes_instance(llama_stack_url)\n    \n    #
+    Create StateGraph\n    workflow = StateGraph(GraphState)\n    \n    # Add nodes\n
+    \   print(\"   \U0001F4CD Adding nodes...\")\n    workflow.add_node(\"retrieve\",
+    nodes.retrieve)\n    workflow.add_node(\"rerank\", nodes.rerank)\n    workflow.add_node(\"grade_documents\",
+    nodes.grade_documents)\n    workflow.add_node(\"generate\", nodes.generate)\n
+    \   workflow.add_node(\"transform_query\", nodes.transform_query)\n    \n    #
+    Build graph edges\n    print(\"   \U0001F517 Adding edges...\")\n    \n    # Start
+    → Retrieve\n    workflow.add_edge(START, \"retrieve\")\n    \n    # Retrieve →
+    Rerank (always)\n    workflow.add_edge(\"retrieve\", \"rerank\")\n    \n    #
+    Rerank → Grade (always)\n    workflow.add_edge(\"rerank\", \"grade_documents\")\n
+    \   \n    # Grade → Generate OR Transform (conditional)\n    workflow.add_conditional_edges(\n
+    \       \"grade_documents\",\n        Edge.decide_to_generate,\n        {\n            \"transform_query\":
+    \"transform_query\",\n            \"generate\": \"generate\",\n        },\n    )\n
+    \   \n    # Transform → Retrieve (loop back for retry)\n    workflow.add_edge(\"transform_query\",
+    \"retrieve\")\n    \n    # Generate → END OR Transform (conditional)\n    workflow.add_conditional_edges(\n
+    \       \"generate\",\n        Edge.grade_generation_vs_documents_and_question,\n
+    \       {\n            \"not supported\": \"generate\",  # Try again with same
+    context\n            \"useful\": END,  # Success!\n            \"not useful\":
+    \"transform_query\",  # Retry with new query\n        },\n    )\n    \n    print(\"
+    \  ✅ Workflow graph built!\")\n    print(\"   \U0001F504 Self-correction enabled
+    (max iterations: {})\".format(max_iterations))\n    \n    # Compile the graph\n
+    \   app = workflow.compile()\n    \n    print(\"   ✅ Workflow compiled and ready!\")\n
+    \   \n    return app\n\n\ndef run_analysis(\n    question: str,\n    namespace:
+    str,\n    pod_name: str = None,\n    log_context: str = \"\",\n    pod_events:
+    str = \"\",\n    pod_status: dict = None,\n    time_window: int = 30,\n    max_iterations:
+    int = 3,\n    llama_stack_url: str = None\n) -> dict:\n    \"\"\"\n    Run a complete
+    log analysis using the multi-agent workflow\n    \n    Args:\n        question:
+    User's question about the issue\n        namespace: OpenShift namespace\n        pod_name:
+    Specific pod to analyze (optional)\n        log_context: Raw logs from OpenShift\n
+    \       pod_events: Kubernetes events\n        pod_status: Pod status information\n
+    \       time_window: Time window for analysis (minutes)\n        max_iterations:
+    Max self-correction iterations\n        llama_stack_url: Llama Stack URL\n        \n
+    \   Returns:\n        Dict with analysis results including generation, docs, and
+    metadata\n    \"\"\"\n    print(\"\\n\" + \"=\"*80)\n    print(\"\U0001F680 AI
+    TROUBLESHOOTER v7 - Multi-Agent Log Analysis\")\n    print(\"=\"*80)\n    \n    #
+    Create workflow\n    app = create_workflow(\n        llama_stack_url=llama_stack_url,\n
+    \       max_iterations=max_iterations\n    )\n    \n    # Prepare initial state\n
+    \   initial_state: GraphState = {\n        # Input\n        \"question\": question,\n
+    \       \"namespace\": namespace,\n        \"pod_name\": pod_name,\n        \"time_window\":
+    time_window,\n        \n        # Log Context\n        \"log_context\": log_context,\n
+    \       \"pod_events\": pod_events,\n        \"pod_status\": pod_status or {},\n
+    \       \n        # Retrieval (empty initially)\n        \"retrieved_docs\": [],\n
+    \       \"reranked_docs\": [],\n        \"relevance_scores\": [],\n        \n
+    \       # Generation (empty initially)\n        \"generation\": \"\",\n        \n
+    \       # Self-Correction\n        \"iteration\": 0,\n        \"max_iterations\":
+    max_iterations,\n        \"transformation_history\": [],\n        \n        #
+    Metadata\n        \"timestamp\": datetime.now().isoformat(),\n        \"data_source\":
+    \"mcp\"\n    }\n    \n    print(f\"\\n\U0001F4DD Question: {question}\")\n    print(f\"\U0001F4CD
+    Namespace: {namespace}\")\n    if pod_name:\n        print(f\"\U0001F433 Pod:
+    {pod_name}\")\n    print(f\"⏱️  Time Window: {time_window} minutes\")\n    print(f\"\U0001F504
+    Max Iterations: {max_iterations}\")\n    \n    # Run the workflow\n    print(\"\\n\U0001F504
+    Starting multi-agent workflow...\")\n    print(\"=\"*80)\n    \n    try:\n        #
+    Execute the workflow\n        final_state = app.invoke(initial_state)\n        \n
+    \       print(\"\\n\" + \"=\"*80)\n        print(\"✅ WORKFLOW COMPLETE\")\n        print(\"=\"*80)\n
+    \       \n        # Extract results\n        result = {\n            \"success\":
+    True,\n            \"question\": final_state.get(\"question\"),\n            \"original_question\":
+    question,\n            \"answer\": final_state.get(\"generation\", \"\"),\n            \"relevant_docs\":
+    final_state.get(\"reranked_docs\", []),\n            \"iterations\": final_state.get(\"iteration\",
+    0),\n            \"transformation_history\": final_state.get(\"transformation_history\",
+    []),\n            \"timestamp\": final_state.get(\"timestamp\"),\n            \"metadata\":
+    {\n                \"namespace\": namespace,\n                \"pod_name\": pod_name,\n
+    \               \"num_docs_retrieved\": len(final_state.get(\"retrieved_docs\",
+    [])),\n                \"num_docs_relevant\": len(final_state.get(\"reranked_docs\",
+    [])),\n                \"avg_relevance\": (\n                    sum(final_state.get(\"relevance_scores\",
+    [])) / \n                    len(final_state.get(\"relevance_scores\", []))\n
+    \                   if final_state.get(\"relevance_scores\") else 0\n                )\n
+    \           }\n        }\n        \n        print(f\"\\n\U0001F4CA RESULTS SUMMARY:\")\n
+    \       print(f\"   ✅ Success: {result['success']}\")\n        print(f\"   \U0001F504
+    Iterations: {result['iterations']}\")\n        print(f\"   \U0001F4C4 Relevant
+    Docs: {result['metadata']['num_docs_relevant']}\")\n        print(f\"   \U0001F4C8
+    Avg Relevance: {result['metadata']['avg_relevance']:.2f}\")\n        \n        return
+    result\n        \n    except Exception as e:\n        print(f\"\\n❌ WORKFLOW ERROR:
+    {e}\")\n        import traceback\n        traceback.print_exc()\n        \n        return
+    {\n            \"success\": False,\n            \"error\": str(e),\n            \"question\":
+    question,\n            \"answer\": f\"❌ Analysis failed: {str(e)}\"\n        }\n\n\ndef
+    visualize_workflow(save_path: str = None):\n    \"\"\"\n    Visualize the workflow
+    graph\n    \n    Args:\n        save_path: Path to save the visualization (optional)\n
+    \   \"\"\"\n    try:\n        from graphviz import Digraph\n        \n        app
+    = create_workflow()\n        \n        # Create visualization\n        dot = Digraph(comment='AI
+    Troubleshooter v7 Workflow')\n        dot.attr(rankdir='TB')\n        \n        #
+    Add nodes\n        nodes_list = [\n            (\"START\", \"Start\", \"lightgreen\"),\n
+    \           (\"retrieve\", \"1. Retrieve\\n(BM25 + Vector)\", \"lightblue\"),\n
+    \           (\"rerank\", \"2. Rerank\\n(Score Sorting)\", \"lightblue\"),\n            (\"grade_documents\",
+    \"3. Grade\\n(Relevance Check)\", \"lightyellow\"),\n            (\"generate\",
+    \"4. Generate\\n(LLM Answer)\", \"lightcoral\"),\n            (\"transform_query\",
+    \"5. Transform\\n(Query Rewrite)\", \"plum\"),\n            (\"END\", \"End\",
+    \"lightgreen\")\n        ]\n        \n        for node_id, label, color in nodes_list:\n
+    \           dot.node(node_id, label, style='filled', fillcolor=color)\n        \n
+    \       # Add edges\n        dot.edge(\"START\", \"retrieve\")\n        dot.edge(\"retrieve\",
+    \"rerank\")\n        dot.edge(\"rerank\", \"grade_documents\")\n        dot.edge(\"grade_documents\",
+    \"generate\", label=\"good docs\")\n        dot.edge(\"grade_documents\", \"transform_query\",
+    label=\"poor docs\")\n        dot.edge(\"transform_query\", \"retrieve\", label=\"retry\")\n
+    \       dot.edge(\"generate\", \"END\", label=\"useful\")\n        dot.edge(\"generate\",
+    \"transform_query\", label=\"not useful\")\n        \n        if save_path:\n
+    \           dot.render(save_path, format='png', cleanup=True)\n            print(f\"✅
+    Workflow visualization saved to {save_path}.png\")\n        \n        return dot\n
+    \       \n    except ImportError:\n        print(\"⚠️  graphviz not installed,
+    skipping visualization\")\n        return None\n\n\n# Example usage\nif __name__
+    == \"__main__\":\n    # Example 1: Simple test\n    result = run_analysis(\n        question=\"Why
+    is the pod in CrashLoopBackOff?\",\n        namespace=\"ai-troubleshooter-v6\",\n
+    \       pod_name=\"ai-troubleshooter-gui-v6-abc123\",\n        log_context=\"Error:
+    Container exited with code 1\\nImagePullBackOff: Failed to pull image\",\n        max_iterations=2\n
+    \   )\n    \n    print(\"\\n\" + \"=\"*80)\n    print(\"\U0001F4CB FINAL ANSWER:\")\n
+    \   print(\"=\"*80)\n    print(result[\"answer\"])\n    \n    # Example 2: Visualize
+    workflow\n    print(\"\\n\U0001F4CA Generating workflow visualization...\")\n
+    \   visualize_workflow(save_path=\"/tmp/v7_workflow\")\n\n"
+  state_schema.py: "\"\"\"\nAI Troubleshooter v7 - State Schema\nMulti-Agent Self-Corrective
+    RAG for OpenShift Log Analysis\n\"\"\"\n\nfrom typing import List, Dict, Any,
+    Optional\nfrom typing_extensions import TypedDict\nfrom datetime import datetime\n\n\nclass
+    GraphState(TypedDict):\n    \"\"\"\n    State for OpenShift Log Analysis Multi-Agent
+    Workflow\n    \n    Attributes:\n        # Input\n        question: User's question/query
+    about the issue\n        namespace: OpenShift namespace to analyze\n        pod_name:
+    Specific pod name (optional)\n        time_window: Time window for log collection
+    (minutes)\n        \n        # Log Context\n        log_context: Raw logs collected
+    from OpenShift\n        pod_events: Kubernetes events related to pods\n        pod_status:
+    Pod status information\n        \n        # Retrieval\n        retrieved_docs:
+    Documents retrieved by hybrid retrieval\n        reranked_docs: Documents after
+    reranking\n        relevance_scores: Scores for each document\n        \n        #
+    Generation\n        generation: LLM-generated answer\n        \n        # Self-Correction\n
+    \       iteration: Current iteration count\n        max_iterations: Maximum allowed
+    iterations\n        transformation_history: List of query transformations\n        \n
+    \       # Metadata\n        timestamp: When the analysis started\n        data_source:
+    Source of data (MCP or oc commands)\n    \"\"\"\n    # Input\n    question: str\n
+    \   namespace: str\n    pod_name: Optional[str]\n    time_window: int  # minutes\n
+    \   \n    # Log Context\n    log_context: str\n    pod_events: str\n    pod_status:
+    Dict[str, Any]\n    \n    # Retrieval\n    retrieved_docs: List[Dict[str, Any]]\n
+    \   reranked_docs: List[Dict[str, Any]]\n    relevance_scores: List[float]\n    \n
+    \   # Generation\n    generation: str\n    \n    # Self-Correction\n    iteration:
+    int\n    max_iterations: int\n    transformation_history: List[str]\n    \n    #
+    Metadata\n    timestamp: str\n    data_source: str\n\n\nclass LogDocument(TypedDict):\n
+    \   \"\"\"Structured log document\"\"\"\n    content: str\n    namespace: str\n
+    \   pod_name: str\n    container: Optional[str]\n    timestamp: str\n    log_type:
+    str  # 'log', 'event', 'status'\n    metadata: Dict[str, Any]\n\n\nclass RetrievalResult(TypedDict):\n
+    \   \"\"\"Result from hybrid retrieval\"\"\"\n    documents: List[LogDocument]\n
+    \   scores: List[float]\n    retrieval_method: str  # 'bm25', 'vector', 'hybrid'\n
+    \   query: str\n\n\nclass GradingResult(TypedDict):\n    \"\"\"Result from document
+    grading\"\"\"\n    relevant: bool\n    score: float\n    reasoning: str\n    document_id:
+    int\n\n"
+kind: ConfigMap
+metadata:
+  creationTimestamp: null
+  name: ai-troubleshooter-v8-code
+  namespace: ai-troubleshooter-v8

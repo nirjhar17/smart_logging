@@ -1,0 +1,41 @@
+FROM registry.access.redhat.com/ubi8/python-39:1-187
+
+WORKDIR /app
+
+# Install system dependencies
+USER root
+RUN yum install -y tar gzip && yum clean all
+
+# Install oc client
+RUN curl -L -o oc.tar.gz https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-client-linux.tar.gz && \
+    tar -xzf oc.tar.gz && \
+    mv oc /usr/local/bin/ && \
+    rm oc.tar.gz
+
+# Switch back to default user
+USER 1001
+
+# Copy requirements and install dependencies
+COPY v7_requirements.txt .
+RUN pip install --no-cache-dir -r v7_requirements.txt
+
+# Copy application code
+COPY v7_state_schema.py .
+COPY v7_hybrid_retriever.py .
+COPY v7_graph_nodes.py .
+COPY v7_graph_edges.py .
+COPY v7_main_graph.py .
+COPY v7_log_collector.py .
+COPY v7_streamlit_app.py .
+COPY .env.v7 .env
+
+# Expose Streamlit port
+EXPOSE 8501
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8501/_stcore/health || exit 1
+
+# Run Streamlit app
+CMD ["streamlit", "run", "v7_streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]
+

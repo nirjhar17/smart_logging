@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-troubleshooter-v8-nvidia-code
+  namespace: ai-troubleshooter-v8
+data:
+  app.py: |
+    #!/usr/bin/env python3
+    # Symlink to v8_streamlit_nvidia_app.py
+    import sys
+    import os
+    
+    # Add current directory to path
+    sys.path.insert(0, os.path.dirname(__file__))
+    
+    # Import and run main app
+    import v8_streamlit_nvidia_app
+  
+  k8s_log_fetcher.py: |
+{{ k8s_log_fetcher_content }}
+
+  k8s_hybrid_retriever.py: |
+{{ k8s_hybrid_retriever_content }}
+  
+  v8_streamlit_nvidia_app.py: |
+{{ v8_streamlit_nvidia_app_content }}
+
+
