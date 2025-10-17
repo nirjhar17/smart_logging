@@ -8,6 +8,21 @@
 
 ---
 
+## 📚 Table of Contents
+
+- [Overview](#-overview)
+- [Performance](#-performance)
+- [Architecture](#-architecture)
+- [Quick Start](#-quick-start)
+- [Configuration](#-configuration)
+- [Example Usage](#-example-usage)
+- [Technical Details](#-technical-details)
+- [Repository Structure](#-repository-structure)
+- [Documentation](#-documentation)
+- [Troubleshooting](#-troubleshooting)
+
+---
+
 ## 🎯 Overview
 
 Smart Logging analyzes OpenShift/Kubernetes logs using a multi-agent AI system inspired by [NVIDIA's architecture](https://developer.nvidia.com/blog/build-a-log-analysis-multi-agent-self-corrective-rag-system-with-nvidia-nemotron/). It automatically identifies issues, root causes, and provides actionable solutions.
@@ -248,8 +263,31 @@ Based on [NVIDIA's Multi-Agent Log Analysis](https://developer.nvidia.com/blog/b
 
 ## 📚 Documentation
 
-- **README.md** - This file (overview & quick start)
-- **CRITICAL_FIXES_APPLIED.md** - Technical details of 3 critical fixes
+### Getting Started
+- **[README.md](./README.md)** - This file (overview & quick start)
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** - System design, agents, data flow
+- **[FILE_GUIDE.md](./FILE_GUIDE.md)** - What each file does (reference guide)
+
+### Infrastructure
+- **[INFRASTRUCTURE.md](./INFRASTRUCTURE.md)** - Complete infrastructure setup
+  - Llama Stack configuration
+  - MCP Server deployment
+  - Model hosting (BGE Reranker, Llama 3.2 3B)
+  - Resource requirements
+  - Troubleshooting
+
+### Technical Details
+- **[CRITICAL_FIXES_APPLIED.md](./CRITICAL_FIXES_APPLIED.md)** - 3 critical fixes (50% → 100% detection)
+
+### Quick Reference
+
+| Document | Purpose | When to Read |
+|----------|---------|--------------|
+| README.md | Overview & Deploy | First time setup |
+| ARCHITECTURE.md | How it works | Understanding the system |
+| FILE_GUIDE.md | File reference | Finding specific code |
+| INFRASTRUCTURE.md | Infrastructure | Setting up from scratch |
+| CRITICAL_FIXES_APPLIED.md | Technical fixes | Debugging/optimizing |
 
 ---
 
